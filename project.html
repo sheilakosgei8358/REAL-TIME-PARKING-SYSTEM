@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Smart Parking System</title>
+  <style>
+    :root{
+      --accent:#1071ff;
+      --ok:#28a745;
+      --warn:#ffc107;
+      --danger:#dc3545;
+      --card:#fff;
+      --bg:#f4f7fb;
+      --muted:#666;
+      --maxw:720px;
+    }
+    body{font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);margin:0;padding:24px;display:flex;justify-content:center}
+    .wrap{width:100%;max-width:var(--maxw)}
+    .card{background:var(--card);border-radius:10px;padding:20px;box-shadow:0 6px 24px rgba(20,30,60,0.08);margin-bottom:16px}
+    h1{margin:0 0 8px 0;font-size:20px}
+    .statusRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+    .badge{padding:8px 12px;border-radius:999px;font-weight:600}
+    .badge.free{background:#e8f8f2;color:var(--ok)}
+    .badge.occupied{background:#fff0f0;color:var(--danger)}
+    .badge.booked{background:#fff7e6;color:var(--warn)}
+    .muted{color:var(--muted);font-size:13px}
+    label{display:block;margin-top:12px;font-weight:600}
+    input,button,select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #e3e8ef;border-radius:6px;font-size:14px}
+    .row{display:flex;gap:12px}
+    .row>input{flex:1}
+    button.primary{background:var(--accent);color:#fff;border:0}
+    button.danger{background:var(--danger);color:#fff;border:0}
+    .small{font-size:13px;color:var(--muted)}
+    .admin{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+    pre{background:#0f1724;color:#bfe1ff;padding:12px;border-radius:6px;overflow:auto}
+    footer{font-size:12px;text-align:center;color:var(--muted);margin-top:10px}
+  </style>
+
+  <!-- Firebase v8 CDN -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>🅿️ Smart Parking — Slot 1</h1>
+
+      <div class="statusRow" style="margin-bottom:12px">
+        <div id="statusBadge" class="badge">Loading...</div>
+        <div class="muted" id="bookInfo">—</div>
+      </div>
+
+      <div>
+        <label for="name">Your name</label>
+        <input id="name" type="text" placeholder="Jane Doe" />
+
+        <label for="arrival">Arrival date & time (local)</label>
+        <input id="arrival" type="datetime-local" />
+
+        <div style="margin-top:10px" class="row">
+          <button class="primary" onclick="bookSlot()">Book slot</button>
+          <button class="danger" onclick="cancelSlot()">Cancel</button>
+        </div>
+
+        <div class="small" style="margin-top:8px">Tip: use the <strong>Admin</strong> controls to simulate occupancy for testing.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Admin / Debug</h3>
+      <div class="admin">
+        <select id="adminStatus">
+          <option value="free">Free</option>
+          <option value="booked">Booked</option>
+          <option value="occupied">Occupied</option>
+        </select>
+        <button onclick="adminSet()">Set</button>
+        <button onclick="forceOccupied()">Mark Occupied</button>
+        <button onclick="forceFree()">Mark Free</button>
+      </div>
+
+      <h4 style="margin-top:12px">Raw / logs</h4>
+      <pre id="log">Starting...</pre>
+    </div>
+
+    <footer>Built with ESP32 + Firebase. Auto-refresh every 5s.</footer>
+  </div>
+
+<script>
+/* ========== CONFIG - replace with your Firebase config ========== */
+const firebaseConfig = {
+  apiKey: "AIzaSyC83XNFywh1cxT-0ty6pM9d_mIevHUzI74",
+  authDomain: "smartparkingsystem-55a05.firebaseapp.com",
+  databaseURL: "https://smartparkingsystem-55a05-default-rtdb.firebaseio.com",
+  projectId: "smartparkingsystem-55a05",
+  storageBucket: "smartparkingsystem-55a05.firebasestorage.app",
+  messagingSenderId: "200855735860",
+  appId: "1:200855735860:web:369dd1116fc4ab21148461"
+};
+/* ================================================================= */
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const node = db.ref("slot1");          // node path: /slot1
+const GRACE_SECONDS = 10 * 60;         // optional client-side grace (10 minutes)
+
+/* UI elements */
+const badgeEl = document.getElementById("statusBadge");
+const bookInfoEl = document.getElementById("bookInfo");
+const logEl = document.getElementById("log");
+
+/* helper logging */
+function log(...args){ console.log(...args); logEl.textContent = args.join(" ") + "\n" + logEl.textContent; }
+
+/* convert epoch -> readable local string (or empty) */
+function fmtEpoch(e){
+  if(!e) return "";
+  const dt = new Date(Number(e)*1000);
+  return dt.toLocaleString();
+}
+
+/* Update UI from DB snapshot */
+function applySnapshot(snap){
+  const data = snap.val() || {};
+  const status = data.status || "free";
+  const bookedBy = data.bookedBy || "";
+  const arrival = data.arrivalTime || "";
+  const arrivalReadable = arrival ? fmtEpoch(arrival) : "";
+
+  badgeEl.className = "badge " + status;
+  badgeEl.textContent = status.toUpperCase();
+
+  if(status === "booked"){
+    bookInfoEl.innerHTML = `Booked by <strong>${bookedBy}</strong> • Arrival: ${arrivalReadable}`;
+  } else if(status === "occupied"){
+    bookInfoEl.innerHTML = `Occupied`;
+  } else {
+    bookInfoEl.innerHTML = `Slot is free`;
+  }
+
+  log("DB:", JSON.stringify(data));
+}
+
+/* listener for realtime updates */
+node.on("value", snapshot => {
+  applySnapshot(snapshot);
+});
+
+/* booking function */
+async function bookSlot(){
+  const name = document.getElementById("name").value.trim();
+  const arrivalInput = document.getElementById("arrival").value;
+  if(!name || !arrivalInput){ alert("Enter name and arrival time"); return; }
+
+  const arrivalEpoch = Math.floor(new Date(arrivalInput).getTime()/1000);
+
+  // Patch booking to DB
+  try{
+    await node.update({
+      status: "booked",
+      bookedBy: name,
+      arrivalTime: String(arrivalEpoch)
+    });
+    log("Booked:", name, arrivalEpoch);
+    alert("Slot booked ✔");
+  }catch(e){
+    log("Booking failed", e);
+    alert("Booking failed");
+  }
+}
+
+/* cancel booking (set free) */
+async function cancelSlot(){
+  try{
+    await node.update({ status: "free", bookedBy: "", arrivalTime: "" });
+    log("Canceled booking");
+    alert("Booking canceled");
+  }catch(e){
+    log("Cancel failed", e);
+  }
+}
+
+/* Admin helpers for testing */
+async function adminSet(){
+  const s = document.getElementById("adminStatus").value;
+  await node.update({ status: s });
+  log("Admin set status ->", s);
+}
+async function forceOccupied(){
+  await node.update({ status:"occupied", bookedBy:"", arrivalTime:"" });
+  log("Forced occupied");
+}
+async function forceFree(){
+  await node.update({ status:"free", bookedBy:"", arrivalTime:"" });
+  log("Forced free");
+}
+
+/* Client-side auto-expire check:
+   This is a convenience: it will free a slot if arrival time + grace passed.
+   NOTE: This does not replace server/ESP checks; keep ESP doing authoritative checks.
+*/
+async function clientExpiryCheck(){
+  const snap = await node.once("value");
+  const data = snap.val() || {};
+  if(data.status !== "booked") return;
+  const arrival = Number(data.arrivalTime) || 0;
+  if(!arrival) return;
+  const now = Math.floor(Date.now()/1000);
+  if(now > (arrival + GRACE_SECONDS)){
+    log("Client: booking expired -> releasing slot");
+    await node.update({ status:"free", bookedBy:"", arrivalTime:"" });
+  }
+}
+
+/* periodic tasks */
+setInterval(()=> {
+  clientExpiryCheck().catch(e=>log("expiry err", e));
+}, 10_000); // every 10s
+
+// initial read
+node.once("value").then(s=>applySnapshot(s)).catch(e=>log("init read err", e));
+</script>
+</body>
+</html>
