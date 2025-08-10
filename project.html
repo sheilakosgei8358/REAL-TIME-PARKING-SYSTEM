@@ -7,133 +7,184 @@
       font-family: Arial, sans-serif;
       padding: 20px;
       background: #f7f7f7;
-      max-width: 500px;
+      max-width: 600px;
       margin: auto;
     }
-    h2 { color: #333; }
-    .status { font-size: 20px; font-weight: bold; margin: 10px 0; }
+    h1 { text-align: center; }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      font-weight: bold;
+      border-radius: 5px;
+      text-align: center;
+    }
+    .free { background: #c8f7c5; color: green; }
+    .booked { background: #fef9c3; color: #b58900; }
+    .occupied { background: #f8d7da; color: #842029; }
     input, button {
-      display: block;
-      margin: 8px 0;
+      margin: 5px 0;
       padding: 8px;
       width: 100%;
+      box-sizing: border-box;
     }
-    button { cursor: pointer; }
-    .free { color: green; }
-    .booked { color: orange; }
-    .occupied { color: red; }
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+      background: #007bff;
+      color: white;
+      font-size: 14px;
+    }
+    button.cancel {
+      background: red;
+    }
+    .location {
+      font-weight: bold;
+      margin-bottom: 10px;
+      font-size: 16px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
-  <h2>Smart Parking Slot - 1</h2>
-  <div>Status: <span id="status" class="status">Loading...</span></div>
-  <div id="bookingInfo"></div>
+  <h1>Smart Parking Slot</h1>
 
-  <h3>Book Slot</h3>
-  <input type="text" id="name" placeholder="Your Name">
-  <input type="text" id="location" placeholder="Parking Slot Location">
-  <label>Arrival Time (YYYY-MM-DD HH:MM)</label>
-  <input type="datetime-local" id="arrival">
-  <label>Leaving Time (YYYY-MM-DD HH:MM)</label>
-  <input type="datetime-local" id="leave">
-  <button onclick="bookSlot()">Book Slot</button>
-  <button onclick="cancelBooking()">Cancel Booking</button>
+  <!-- Static Location Text -->
+  <div class="location">Location: Nairobi CBD, Kenyatta Avenue</div>
 
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+  <div id="slotStatus" class="status">Loading status...</div>
+
+  <div id="bookingForm">
+    <input type="text" id="name" placeholder="Your Name" required>
+    <label for="arrivalTime">Arrival Time:</label>
+    <input type="datetime-local" id="arrivalTime" required>
+    <label for="leaveTime">Leaving Time:</label>
+    <input type="datetime-local" id="leaveTime" required>
+    <button onclick="bookSlot()">Book Slot</button>
+  </div>
+
+  <div id="cancelForm" style="display:none;">
+    <button class="cancel" onclick="cancelBooking()">Cancel Booking</button>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 
   <script>
-    // TODO: Replace with your Firebase config
-    var firebaseConfig = {
-      apiKey: "YOUR_API_KEY",
-      authDomain: "YOUR_AUTH_DOMAIN",
-      databaseURL: "YOUR_DATABASE_URL",
-      projectId: "YOUR_PROJECT_ID",
-      storageBucket: "YOUR_STORAGE_BUCKET",
-      messagingSenderId: "YOUR_MSG_ID",
-      appId: "YOUR_APP_ID"
+    // Your Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyC83XNFywh1cxT-0ty6p9d_mIevHUzI74",
+      authDomain: "smartparkingsystem-55a05.firebaseapp.com",
+      databaseURL: "https://smartparkingsystem-55a05-default-rtdb.firebaseio.com",
+      projectId: "smartparkingsystem-55a05",
+      storageBucket: "smartparkingsystem-55a05.firebasestorage.app",
+      messagingSenderId: "200855735860",
+      appId: "1:200855735860:web:369dd1116fc4ab21148461",
+      measurementId: "G-XHXNGLQBFH"
     };
     firebase.initializeApp(firebaseConfig);
-    var db = firebase.database();
+    const db = firebase.database();
 
-    const statusEl = document.getElementById("status");
-    const bookingInfoEl = document.getElementById("bookingInfo");
-
-    // Get NTP time
+    // Fetch NTP time from worldtimeapi
     async function getNTPTime() {
-      let res = await fetch("https://worldtimeapi.org/api/ip");
-      let data = await res.json();
-      return new Date(data.datetime);
+      try {
+        const res = await fetch("https://worldtimeapi.org/api/timezone/Africa/Nairobi");
+        if (!res.ok) throw new Error("NTP fetch failed");
+        const data = await res.json();
+        return new Date(data.datetime);
+      } catch {
+        return new Date();
+      }
     }
 
-    // Listen to slot changes
-    db.ref("slot1").on("value", async (snapshot) => {
-      let slot = snapshot.val();
-      if (!slot) {
-        statusEl.textContent = "Free";
-        statusEl.className = "status free";
-        bookingInfoEl.innerHTML = "";
-        return;
-      }
+    // Firebase reference for the parking slot
+    const slotRef = db.ref("parking/slot1");
 
-      let now = await getNTPTime();
-      let arrivalTime = new Date(slot.arrival);
-      let leaveTime = new Date(slot.leave);
-
-      if (slot.status === "booked" && now > arrivalTime && slot.occupied !== true) {
-        // Auto-expire
-        db.ref("slot1").set(null);
-        statusEl.textContent = "Free";
-        statusEl.className = "status free";
-        bookingInfoEl.innerHTML = "";
-        return;
-      }
-
-      if (slot.status === "occupied" && now > leaveTime) {
-        // Free after leaving
-        db.ref("slot1").set(null);
-        return;
-      }
-
-      statusEl.textContent = slot.status.charAt(0).toUpperCase() + slot.status.slice(1);
-      statusEl.className = "status " + slot.status;
-      bookingInfoEl.innerHTML = `
-        <b>Name:</b> ${slot.name}<br>
-        <b>Location:</b> ${slot.location}<br>
-        <b>Arrival:</b> ${slot.arrival}<br>
-        <b>Leave:</b> ${slot.leave}
-      `;
+    // Update UI based on slot status in Firebase
+    slotRef.on("value", snapshot => {
+      const data = snapshot.val();
+      updateStatus(data);
     });
 
+    function updateStatus(data) {
+      const statusEl = document.getElementById("slotStatus");
+      if (!data) {
+        statusEl.textContent = "Free";
+        statusEl.className = "status free";
+        document.getElementById("bookingForm").style.display = "block";
+        document.getElementById("cancelForm").style.display = "none";
+        return;
+      }
+
+      const now = new Date();
+      const arrival = new Date(data.arrivalTime);
+      const leave = new Date(data.leaveTime);
+
+      if (data.occupied) {
+        statusEl.textContent = "Occupied";
+        statusEl.className = "status occupied";
+      } else if (now < arrival) {
+        statusEl.textContent = "Booked (Awaiting Arrival)";
+        statusEl.className = "status booked";
+      } else if (now >= arrival && now <= leave) {
+        statusEl.textContent = "Occupied";
+        statusEl.className = "status occupied";
+      } else {
+        // Booking expired: clear slot
+        slotRef.remove();
+        statusEl.textContent = "Free";
+        statusEl.className = "status free";
+      }
+
+      if (data.name) {
+        document.getElementById("bookingForm").style.display = "none";
+        document.getElementById("cancelForm").style.display = "block";
+      } else {
+        document.getElementById("bookingForm").style.display = "block";
+        document.getElementById("cancelForm").style.display = "none";
+      }
+    }
+
     async function bookSlot() {
-      let name = document.getElementById("name").value.trim();
-      let location = document.getElementById("location").value.trim();
-      let arrival = document.getElementById("arrival").value;
-      let leave = document.getElementById("leave").value;
+      const name = document.getElementById("name").value.trim();
+      const arrivalTime = document.getElementById("arrivalTime").value;
+      const leaveTime = document.getElementById("leaveTime").value;
 
-      if (!name || !location || !arrival || !leave) {
-        alert("Please fill all fields");
+      if (!name || !arrivalTime || !leaveTime) {
+        alert("Please fill all fields.");
         return;
       }
 
-      let now = await getNTPTime();
-      if (new Date(arrival) < now) {
-        alert("Arrival time must be in the future");
+      const ntpTime = await getNTPTime();
+      const arrival = new Date(arrivalTime);
+      if (arrival < ntpTime) {
+        alert("Arrival time must be in the future.");
+        return;
+      }
+      if (new Date(leaveTime) <= arrival) {
+        alert("Leaving time must be after arrival time.");
         return;
       }
 
-      db.ref("slot1").set({
-        name: name,
-        location: location,
-        arrival: arrival,
-        leave: leave,
-        status: "booked",
-        occupied: false
+      slotRef.set({
+        name,
+        arrivalTime,
+        leaveTime,
+        occupied: false,
+        status: "booked"
       });
+
+      alert("Slot booked successfully! Please arrive on time.");
+      // Clear form
+      document.getElementById("name").value = "";
+      document.getElementById("arrivalTime").value = "";
+      document.getElementById("leaveTime").value = "";
     }
 
     function cancelBooking() {
-      db.ref("slot1").set(null);
+      slotRef.remove();
+      alert("Booking cancelled.");
     }
   </script>
 </body>
